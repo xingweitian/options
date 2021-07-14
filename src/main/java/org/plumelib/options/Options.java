@@ -19,8 +19,6 @@ import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.net.URI;
-import java.net.URL;
-import java.net.URLClassLoader;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
@@ -424,8 +422,8 @@ public class Options {
      * @param unpublicized whether the option is unpublicized
      */
     @SuppressWarnings({
-      "nullness:argument.type.incompatible", // field is static when object is null
-      "interning:argument.type.incompatible" // interning is not relevant to the call
+      "nullness:argument", // field is static when object is null
+      "interning:argument" // interning is not relevant to the call
     })
     OptionInfo(
         Field field,
@@ -704,7 +702,7 @@ public class Options {
       for (Field f : fields) {
         try {
           // Possible exception because "obj" is not yet initialized; catch it and proceed
-          @SuppressWarnings("nullness:initialization.invalid.cast")
+          @SuppressWarnings("nullness:initialization.cast")
           Object objNonraw = (@Initialized Object) obj;
           if (debugEnabled) {
             System.err.printf("Considering field %s of object %s%n", f, objNonraw);
@@ -741,8 +739,9 @@ public class Options {
           throw new Error("non-static option " + f + " in class " + obj);
         }
 
-        @SuppressWarnings("nullness:assignment.type.incompatible") // new C(underInit) yields
-        // @UnderInitialization; @Initialized is safe
+        @SuppressWarnings(
+            "nullness:assignment" // new C(underInit): @UnderInitialization; @Initialized is safe
+        )
         @Initialized OptionInfo oi = new OptionInfo(f, option, isClass ? null : obj, unpublicized);
         options.add(oi);
 
@@ -841,7 +840,7 @@ public class Options {
       Field f, Class<T> annotationClass) {
     @Nullable T annotation;
     try {
-      // @SuppressWarnings("nullness:initialization.invalid.cast")
+      // @SuppressWarnings("nullness:initialization.cast")
       @Nullable T cast = f.getAnnotation((Class<@NonNull T>) annotationClass);
       annotation = cast;
     } catch (Exception e) {
@@ -858,20 +857,6 @@ public class Options {
     }
 
     return annotation;
-  }
-
-  /** Print the classpath. */
-  static void printClassPath() {
-    URLClassLoader sysLoader = (URLClassLoader) ClassLoader.getSystemClassLoader();
-    if (sysLoader == null) {
-      System.out.println(
-          "No system class loader. (Maybe means bootstrap class loader is being used?)");
-    } else {
-      System.out.println("Classpath:");
-      for (URL url : sysLoader.getURLs()) {
-        System.out.println(url.getFile());
-      }
-    }
   }
 
   /**
@@ -1310,8 +1295,8 @@ public class Options {
    * @throws ArgException if there are any errors
    */
   @SuppressWarnings({
-    "nullness:argument.type.incompatible", // object can be null if field is static
-    "interning:argument.type.incompatible" // interning is not relevant to the call
+    "nullness:argument", // object can be null if field is static
+    "interning:argument" // interning is not relevant to the call
   })
   private void setArg(OptionInfo oi, String argName, @Nullable String argValue)
       throws ArgException {
@@ -1617,6 +1602,7 @@ public class Options {
    * than the message string.
    */
   public static class ArgException extends Exception {
+    /** Unique identifier for serialization. If you add or remove fields, change this number. */
     static final long serialVersionUID = 20051223L;
 
     /**
