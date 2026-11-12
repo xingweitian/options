@@ -19,8 +19,6 @@ import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.net.URI;
-import java.net.URL;
-import java.net.URLClassLoader;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
@@ -29,20 +27,28 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.StringJoiner;
 import java.util.regex.Pattern;
 import org.checkerframework.checker.formatter.qual.FormatMethod;
 import org.checkerframework.checker.initialization.qual.Initialized;
 import org.checkerframework.checker.initialization.qual.UnknownInitialization;
 import org.checkerframework.checker.lock.qual.GuardSatisfied;
+import org.checkerframework.checker.modifiability.qual.Growable;
+import org.checkerframework.checker.modifiability.qual.IteratorPolyMod;
+import org.checkerframework.checker.modifiability.qual.Modifiable;
+import org.checkerframework.checker.modifiability.qual.Shrinkable;
 import org.checkerframework.checker.nullness.qual.KeyFor;
 import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 import org.checkerframework.checker.nullness.qual.NonNull;
 import org.checkerframework.checker.nullness.qual.Nullable;
+import org.checkerframework.checker.signedness.qual.Signed;
 import org.checkerframework.dataflow.qual.Pure;
 import org.checkerframework.dataflow.qual.SideEffectFree;
+import org.plumelib.util.CollectionsP;
 
 /**
  * The Options class:
@@ -51,11 +57,11 @@ import org.checkerframework.dataflow.qual.SideEffectFree;
  *   <li>parses command-line options and sets fields in your program accordingly,
  *   <li>creates usage messages (such as printed by a <span style="white-space: nowrap;">{@code
  *       --help}</span> option), and
- *   <li>creates documentation suitable for a manual or manpage.
+ *   <li>(at build time) creates documentation suitable for a manual or manpage.
  * </ul>
  *
- * Thus, the programmer is freed from writing duplicative, boilerplate code. The user documentation
- * is automatically generated and never gets out of sync with the rest of the program.
+ * <p>Thus, the programmer is freed from writing duplicative, boilerplate code. The user
+ * documentation is automatically generated and never gets out of sync with the rest of the program.
  *
  * <p>The programmer does not have to write any code, only declare and document variables. For each
  * field that you want to set from a command-line argument, you write Javadoc and an {@code @Option}
@@ -80,26 +86,35 @@ import org.checkerframework.dataflow.qual.SideEffectFree;
  *   public static File outfile = new File("/tmp/foobar");
  *
  *   &#64;Option("-i ignore case")
- *   public static boolean ignore_case;
+ *   public static boolean ignoreCase; // or, name the variable ignore_case
  *
  *   &#64;Option("set the initial temperature")
  *   public static double temperature = 75.0;
  *
  *   public static void main(String[] args) {
+ *
+ *     // variant 1
  *     MyProgram myInstance = new MyProgram();
  *     Options options = new Options("MyProgram [options] infile outfile",
  *                                   myInstance, MyUtilityClass.class);
  *     String[] remainingArgs = options.parse(true, args);
+ *
+ *     // variant 2
+ *     Options options = new Options("MyProgram [options] infile outfile",
+ *                                   MyProgram.class, MyUtilityClass.class);
+ *     String[] remainingArgs = options.parse(true, args);
+ *
  *     ...
  *   }
  * }
  * </pre>
  *
- * In the code above, the call to {@link #parse(boolean, String[])} sets fields in object {@code
- * myInstance} and sets static fields in class {@code MyUtilityClass}. It returns the original
- * command line, with all options removed. If a command-line argument is incorrect, it prints a
- * usage message and terminates the program. The program can also explicitly create or print a usage
- * message; see {@link #usage(String...)} and {@link #printUsage()}.
+ * <p>In the first variant code above, the call to {@link #parse(boolean, String[])} sets fields in
+ * object {@code myInstance} and sets static fields in class {@code MyUtilityClass}. (In the second
+ * variant, it sets static fields in both classes.) It returns the original command line, with all
+ * options removed. If a command-line argument is incorrect, it prints a usage message and
+ * terminates the program. The program can also explicitly create or print a usage message; see
+ * {@link #usage(String...)} and {@link #printUsage()}.
  *
  * <p>For examples of generated HTML documentation, see the documentation for <a
  * href="https://types.cs.washington.edu/plume-lib/api/plume/Lookup.html#command-line-options">Lookup</a>,
@@ -110,17 +125,23 @@ import org.checkerframework.dataflow.qual.SideEffectFree;
  *
  * <p>The {@code @}{@link Option} annotation on a field specifies brief user documentation and,
  * optionally, a one-character short name that a user may supply on the command line. The long name
- * is taken from the name of the variable. When the name contains an underscore, the user may
- * substitute a hyphen on the command line instead; for example, the <span style="white-space:
- * nowrap;">{@code --multi-word-variable}</span> command-line option would set the variable {@code
- * multi_word_variable}.
+ * is taken from the name of the variable. When the name contains a capital letter, the user must
+ * use a hyphen or underscore to separate words. When the name contains an underscore, the user may
+ * substitute a hyphen on the command line instead.
+ *
+ * <p>For example, both the <span style="white-space: nowrap;">{@code --multi-word-variable}</span>
+ * and <span style="white-space: nowrap;">{@code --multi_word_variable}</span> command-line options
+ * would set a variable named {@code multiWordVariable} or {@code multi_word_variable}. (It is an
+ * error to define two variables {@code multiWordVariable} and {@code multi_word_variable}, and to
+ * annotate both of them with {@code @Option}.)
  *
  * <p>A user of your program supplies command-line options in the form <span style="white-space:
  * nowrap;">"--name=value"</span> or <span style="white-space: nowrap;">"-name value"</span>. The
  * value (after the "=" or " ") is mandatory for all options except booleans. Booleans are set to
- * true if no value is specified. Booleans support <span style="white-space:
+ * true if no value is specified.
+ * <!-- Booleans support <span style="white-space:
  * nowrap;">"--no-<em>optionname</em>"</span> which is equivalent to <span style="white-space:
- * nowrap;">"--optionname=false"</span>.
+ * nowrap;">"--optionname=false"</span>. -->
  *
  * <p>A user may provide an option multiple times on the command line. If the field is a list, each
  * entry is added to the list. If the field is not a list, then only the last occurrence is used
@@ -166,7 +187,7 @@ import org.checkerframework.dataflow.qual.SideEffectFree;
  *       for a manual.
  * </ul>
  *
- * If an option group is not unpublicized but contains only unpublicized options, it will not be
+ * <p>If an option group is not unpublicized but contains only unpublicized options, it will not be
  * included in the default usage message.
  *
  * <p><b>Option aliases</b>
@@ -182,17 +203,18 @@ import org.checkerframework.dataflow.qual.SideEffectFree;
  * meaning:
  *
  * <pre>
- *     // The user may supply --help, -h, or -help, all of which mean the same thing and set this variable.
- *     &#64;Option(value="-h Print a help message", aliases={"-help"})
- *     public static boolean help;</pre>
+ * // The user may supply --help, -h, or -help, which all mean the same thing and set this variable.
+ * &#64;Option(value="-h Print a help message", aliases={"-help"})
+ * public static boolean help;</pre>
  *
- * Aliases should start with a single dash or double dash. If there is only a single, one-character
- * alias, it can be put at the beginning of the value field or in the aliases field. It is the
- * programmer's responsibility to ensure that no alias is the same as other options or aliases.
+ * <p>Aliases should start with a single dash or double dash. If there is only a single,
+ * one-character alias, it can be put at the beginning of the value field or in the aliases field.
+ * It is the programmer's responsibility to ensure that no alias is the same as other options or
+ * aliases.
  *
  * <p><b>Generating documentation for a manual or manpage</b>
  *
- * <p>It is helpful to include a summary of all command-line options in amanual, manpage, or the
+ * <p>It is helpful to include a summary of all command-line options in a manual, manpage, or the
  * class Javadoc for a class that has a main method. The {@link org.plumelib.options.OptionsDoclet}
  * class generates HTML documentation.
  *
@@ -202,13 +224,18 @@ import org.checkerframework.dataflow.qual.SideEffectFree;
  *
  * <ul>
  *   <li>Primitive types: boolean, byte, char, short, int, long, float, double.
- *   <li>Primitive type wrappers: Boolean, Byte, Char, Short, Integer, Long, Float, Double. Use of a
- *       wrapper type allows the argument to have no default value.
+ *   <li>Primitive type wrappers: Boolean, Byte, Character, Short, Integer, Long, Float, Double. Use
+ *       of a wrapper type allows the argument to have no default value. A wrapper type accepts
+ *       exactly the same arguments as its corresponding primitive type.
  *   <li>Reference types that have a constructor with a single string parameter.
  *   <li>java.util.regex.Pattern.
  *   <li>enums.
  *   <li>Lists of any of the above reference types.
  * </ul>
+ *
+ * <p>A boolean or Boolean argument must be "true", "t", "false", or "f", ignoring case. An integral
+ * argument may be written in decimal, in hexadecimal (with prefix "0x", "0X", or "#"), or in octal
+ * (with prefix "0"), as by {@link Integer#decode}.
  *
  * <p><b>Customization</b>
  *
@@ -226,7 +253,8 @@ import org.checkerframework.dataflow.qual.SideEffectFree;
  *   <li>The programmer may set {@link #usageSynopsis} to masquerade as another program.
  *   <li>If {@link #useDashes} is false, then usage messages advertise long options with underscores
  *       (as in {@code --my_option_name}) instead of dashes (as in {@code --my-option-name}). The
- *       user can always specify either; this just affects usage messages. It defaults to false.
+ *       user can always specify either one on the command line; {@link #useDashes} just affects
+ *       usage messages. It defaults to false.
  * </ul>
  *
  * <p><b>Limitations</b>
@@ -235,9 +263,9 @@ import org.checkerframework.dataflow.qual.SideEffectFree;
  *   <li>Short options are only supported as separate entries (e.g., <span style="white-space:
  *       nowrap;">"-a -b"</span>) and not as a single group (e.g., <span style="white-space:
  *       nowrap;">"-ab"</span>).
- *   <li>If you have a boolean option named exactly "long", you must use <span style="white-space:
+ *   <li>If you have a boolean option named "long", you must use <span style="white-space:
  *       nowrap;">"--long=false"</span> to turn it off; <span style="white-space:
- *       nowrap;">"--no-long"</span> is not supported.
+ *       nowrap;">"--no-long"</span> is not yet supported.
  * </ul>
  *
  * @see org.plumelib.options.Option
@@ -245,6 +273,7 @@ import org.checkerframework.dataflow.qual.SideEffectFree;
  * @see org.plumelib.options.Unpublicized
  * @see org.plumelib.options.OptionsDoclet
  */
+@SuppressWarnings("PMD.BooleanGetMethodName")
 public class Options {
 
   // User-settable fields
@@ -257,7 +286,7 @@ public class Options {
   public boolean useSingleDash = false;
 
   /**
-   * Whether to parse options after a non-option command-line argument. If false, option processing
+   * If true, parse options after a non-option command-line argument. If false, option processing
    * stops at the first non-option command-line argument. If true, options specified even at the end
    * of the command line are processed.
    *
@@ -266,7 +295,7 @@ public class Options {
   private boolean parseAfterArg = true;
 
   /**
-   * Whether to treat arguments to lists as space-separated. Defaults to false.
+   * If true, treat arguments to lists as space-separated. Defaults to false.
    *
    * <p>When true, an argument to an option of list type is split, on whitespace, into multiple
    * arguments each of which is added to the list. When false, each argument to an option of list
@@ -275,7 +304,7 @@ public class Options {
    * <p>For example, when this is true, a command line containing <span style="white-space:
    * nowrap;">{@code --my-option="foo bar"}</span> is equivalent to <span style="white-space:
    * nowrap;">{@code --my-option="foo" --my-option="bar"}</span>. Both of them have the effect of
-   * adding two elements, "foo" and "bar", to the list {@code my_option}.
+   * adding two elements, "foo" and "bar", to the list {@code myOption} (or {@code my_option}).
    */
   public static boolean spaceSeparatedLists = false;
 
@@ -301,13 +330,15 @@ public class Options {
   private Class<?> mainClass = Void.TYPE;
 
   /** List of all of the defined options. */
-  private final List<OptionInfo> options = new ArrayList<>();
+  @SuppressWarnings("PMD.AvoidFieldNameMatchingTypeName")
+  private final @Modifiable List<OptionInfo> options = new ArrayList<>();
 
   /** Map from short or long option names (with leading dashes) to option information. */
-  private final Map<String, OptionInfo> nameMap = new LinkedHashMap<>();
+  private final @Modifiable Map<String, OptionInfo> nameToOption = new LinkedHashMap<>();
 
   /** Map from option group name to option group information. */
-  private final Map<String, OptionGroupInfo> groupMap = new LinkedHashMap<>();
+  private final @Modifiable Map<String, OptionGroupInfo> groupNameToOptionGroup =
+      new LinkedHashMap<>();
 
   /**
    * If true, then the user is using {@code @OptionGroup} annotations correctly (as per the
@@ -328,17 +359,34 @@ public class Options {
   /**
    * Enable or disable debug logging.
    *
-   * @param enabled whether to enable or disable logging
+   * @param enabled if true, enable logging; if false, disable logging
    */
   public void enableDebugLogging(boolean enabled) {
     debugEnabled = enabled;
   }
 
   /** All of the argument options as a single string. Used for debugging. */
-  private String optionsString = "";
+  @SuppressWarnings("PMD.AvoidStringBufferField")
+  private StringBuilder optionsString = new StringBuilder();
 
   /** The system-dependent line separator. */
-  private static String lineSeparator = System.lineSeparator();
+  private static final String lineSeparator = System.lineSeparator();
+
+  /**
+   * The primitive type wrappers. Each is converted by {@link #getScalarArg}, exactly as the
+   * corresponding primitive type is, so that (for example) {@code Integer} and {@code int} accept
+   * the same command-line arguments.
+   */
+  private static final Set<Class<?>> PRIMITIVE_WRAPPERS =
+      Set.of(
+          Boolean.class,
+          Byte.class,
+          Character.class,
+          Short.class,
+          Integer.class,
+          Long.class,
+          Float.class,
+          Double.class);
 
   /** Information about an option. */
   class OptionInfo {
@@ -355,7 +403,10 @@ public class Options {
     /** Short (one-character) argument name. */
     @Nullable String shortName;
 
-    /** Long argument name. */
+    /**
+     * Long argument name. Uses '-' or '_' to separate words, depending on the value of {@link
+     * #useDashes}.
+     */
     String longName;
 
     /** Aliases for this option. */
@@ -371,7 +422,7 @@ public class Options {
      * Maps names of enum constants to their corresponding Javadoc. This is used by OptionsDoclet to
      * generate documentation for enum-type options. Null if the baseType is not an Enum.
      */
-    @MonotonicNonNull Map<String, String> enumJdoc;
+    @Modifiable @MonotonicNonNull Map<String, String> enumJdoc;
 
     /**
      * Name of the argument type. Defaults to the type of the field, but user can override this in
@@ -389,10 +440,19 @@ public class Options {
      * If true, the default value string for this option will be excluded from OptionsDoclet
      * documentation.
      */
-    boolean noDocDefault = false;
+    boolean noDocDefault;
 
-    /** If the option is a list, this references that list. */
-    @MonotonicNonNull List<Object> list = null;
+    /**
+     * If the option is a list, this references that list. This value is side-effected rather than
+     * the field being set.
+     */
+    @Growable @Shrinkable @IteratorPolyMod @MonotonicNonNull List<Object> list = null;
+
+    /**
+     * If true, the {@link #list} field is set to the default value. If false, it contains
+     * command-line arguments.
+     */
+    boolean listIsDefault = true;
 
     /** Constructor that takes one String for the type. */
     @Nullable Constructor<?> constructor = null;
@@ -421,12 +481,8 @@ public class Options {
      * @param field the field to set
      * @param option the option
      * @param obj the object whose field will be set; if obj is null, the field must be static
-     * @param unpublicized whether the option is unpublicized
+     * @param unpublicized true if the option is unpublicized
      */
-    @SuppressWarnings({
-      "nullness:argument.type.incompatible", // field is static when object is null
-      "interning:argument.type.incompatible" // interning is not relevant to the call
-    })
     OptionInfo(
         Field field,
         Option option,
@@ -444,8 +500,7 @@ public class Options {
         throw new Error("obj is null for non-static field " + field);
       }
 
-      // The long name is the name of the field
-      longName = field.getName();
+      longName = fieldNameToOptionName(field.getName());
       if (useDashes) {
         longName = longName.replace('_', '-');
       }
@@ -460,15 +515,14 @@ public class Options {
         defaultStr = defaultObj.toString();
       }
 
-      if (field.getType().isArray()) {
+      if (baseType.isArray()) {
         throw new Error("@Option may not annotate a variable of array type: " + field);
       }
 
       // Handle lists.  When a list argument is specified multiple times,
       // each argument value is appended to the list.
       Type genType = field.getGenericType();
-      if (genType instanceof ParameterizedType) {
-        ParameterizedType pt = (ParameterizedType) genType;
+      if (genType instanceof ParameterizedType pt) {
         Type rawType = pt.getRawType();
         if (!rawType.equals(List.class)) {
           throw new Error(
@@ -479,20 +533,26 @@ public class Options {
                   + field);
         }
         if (defaultObj == null) {
-          List<Object> newList = new ArrayList<>();
-          try {
-            field.set(obj, newList);
-          } catch (Exception e) {
-            throw new Error("Unexpected error setting default for " + field, e);
-          }
-          defaultObj = newList;
+          defaultObj = new ArrayList<>();
+          fieldSet(field, obj, defaultObj);
         }
         if (((List<?>) defaultObj).isEmpty()) {
           defaultStr = null;
         }
-        @SuppressWarnings("unchecked")
-        List<Object> defaultObjAsList = (List<Object>) defaultObj;
+        @SuppressWarnings({
+          "unchecked",
+          "modifiability:assignment",
+          "modifiability:cast.unsafe" // dynamically checked just below
+        })
+        @Modifiable
+        @IteratorPolyMod
+        List<Object> defaultObjAsList = (@Modifiable List<Object>) defaultObj;
+        if (!CollectionsP.isModifiable(defaultObjAsList)) {
+          defaultObjAsList = new ArrayList<>(defaultObjAsList);
+          fieldSet(field, obj, defaultObjAsList);
+        }
         this.list = defaultObjAsList;
+
         // System.out.printf ("list default = %s%n", list);
         Type[] listTypeArgs = pt.getActualTypeArguments();
         this.baseType = (Class<?>) (listTypeArgs.length == 0 ? Object.class : listTypeArgs[0]);
@@ -510,16 +570,17 @@ public class Options {
         throw new Error(
             "Error while processing @Option(\"" + option.value() + "\") on '" + field + "'", e);
       }
-      shortName = pr.shortName;
-      if (pr.typeName != null) {
-        typeName = pr.typeName;
+      shortName = pr.shortName();
+      if (pr.typeName() != null) {
+        typeName = pr.typeName();
       } else {
         typeName = typeShortName(baseType);
       }
-      description = pr.description;
+      description = pr.description();
 
-      // Get a constructor for non-primitive base types
-      if (!baseType.isPrimitive() && !baseType.isEnum()) {
+      // Get a constructor for non-primitive base types.  Primitive type wrappers need neither a
+      // constructor nor a factory, because getScalarArg converts them.
+      if (!baseType.isPrimitive() && !baseType.isEnum() && !PRIMITIVE_WRAPPERS.contains(baseType)) {
         try {
           if (baseType == Path.class) {
             factory = Paths.class.getMethod("get", String.class, String[].class);
@@ -542,9 +603,9 @@ public class Options {
     }
 
     /**
-     * Return whether or not this option has a required argument.
+     * Returns true if this option has a required argument.
      *
-     * @return whether or not this option has a required argument
+     * @return true if this option has a required argument
      */
     public boolean argumentRequired() {
       Class<?> type = field.getType();
@@ -571,7 +632,7 @@ public class Options {
     }
 
     /**
-     * Return a one-line description of the option.
+     * Returns a one-line description of the option.
      *
      * @return a one-line description of the option
      */
@@ -610,7 +671,7 @@ public class Options {
     boolean unpublicized;
 
     /** List of options that belong to this group. */
-    List<OptionInfo> optionList;
+    @Modifiable @IteratorPolyMod List<OptionInfo> optionList;
 
     /**
      * Create a new option group.
@@ -619,7 +680,7 @@ public class Options {
      * @param unpublicized if true, this option group is unpublicized
      */
     OptionGroupInfo(String name, boolean unpublicized) {
-      optionList = new ArrayList<OptionInfo>();
+      optionList = new ArrayList<>();
       this.name = name;
       this.unpublicized = unpublicized;
     }
@@ -630,7 +691,7 @@ public class Options {
      * @param optionGroup the option group to copy
      */
     OptionGroupInfo(OptionGroup optionGroup) {
-      optionList = new ArrayList<OptionInfo>();
+      optionList = new ArrayList<>();
       this.name = optionGroup.value();
       this.unpublicized = optionGroup.unpublicized();
     }
@@ -665,9 +726,9 @@ public class Options {
 
   /**
    * Prepare for option processing. Creates an object that will set fields in all the given
-   * arguments. An argument to this method may be a Class, in which case it must be fully initalized
-   * and its static fields are set. The names of all the options (that is, the fields annotated with
-   * &#064;{@link Option}) must be unique across all the arguments.
+   * arguments. An argument to this method may be a Class, in which case it must be fully
+   * initialized and its static fields are set. The names of all the options (that is, the fields
+   * annotated with &#064;{@link Option}) must be unique across all the arguments.
    *
    * @param usageSynopsis a synopsis of how to call your program
    * @param args the classes whose options to process
@@ -688,9 +749,9 @@ public class Options {
     // Loop through each specified object or class
     for (Object obj : args) {
       boolean isClass = obj instanceof Class<?>;
-      // null or a key in groupMap (that is, an option group name)
+      // null or a key in groupNameToOptionGroup (that is, an option group name)
       @SuppressWarnings("keyfor")
-      @KeyFor("groupMap") String currentGroup = null;
+      @KeyFor("groupNameToOptionGroup") String currentGroup = null;
 
       @SuppressWarnings({
         "nullness" // if isClass is true, obj is a non-null initialized Class
@@ -704,7 +765,7 @@ public class Options {
       for (Field f : fields) {
         try {
           // Possible exception because "obj" is not yet initialized; catch it and proceed
-          @SuppressWarnings("nullness:initialization.invalid.cast")
+          @SuppressWarnings("nullness:cast.unsafe")
           Object objNonraw = (@Initialized Object) obj;
           if (debugEnabled) {
             System.err.printf("Considering field %s of object %s%n", f, objNonraw);
@@ -719,7 +780,7 @@ public class Options {
             System.err.printf(
                 "  with annotations %s%n", Arrays.toString(f.getDeclaredAnnotations()));
           }
-        } catch (java.lang.ArrayStoreException e) {
+        } catch (ArrayStoreException e) {
           if (e.getMessage() != null
               && Objects.equals(
                   e.getMessage(), "sun.reflect.annotation.TypeNotPresentExceptionProxy")) {
@@ -741,8 +802,6 @@ public class Options {
           throw new Error("non-static option " + f + " in class " + obj);
         }
 
-        @SuppressWarnings("nullness:assignment.type.incompatible") // new C(underInit) yields
-        // @UnderInitialization; @Initialized is safe
         @Initialized OptionInfo oi = new OptionInfo(f, option, isClass ? null : obj, unpublicized);
         options.add(oi);
 
@@ -766,7 +825,7 @@ public class Options {
             // without including an @OptionGroup annotation on the first
             // @Option-annotated field, hence violating the requirement.
 
-            // NOTE: changing this error string requires changes to TestPlume
+            // NOTE: changing this error string requires changes to TestOptions
             throw new Error(
                 "missing @OptionGroup annotation on the first "
                     + "@Option-annotated field of class "
@@ -779,22 +838,22 @@ public class Options {
 
         if (optionGroup != null) {
           String name = optionGroup.value();
-          if (groupMap.containsKey(name)) {
+          if (groupNameToOptionGroup.containsKey(name)) {
             throw new Error("option group " + name + " declared twice");
           }
           OptionGroupInfo gi = new OptionGroupInfo(optionGroup);
-          groupMap.put(name, gi);
+          groupNameToOptionGroup.put(name, gi);
           currentGroup = name;
         }
         // The variable currentGroup is set to null at the start of every iteration through 'args'.
         // This is so we can check that the first @Option-annotated field of every class/object in
         // 'args' has an @OptionGroup annotation when hasGroups is true, as required.
         if (currentGroup == null) {
-          // NOTE: changing this error string requires changes to TestPlume
+          // NOTE: changing this error string requires changes to TestOptions
           throw new Error("missing @OptionGroup annotation in field " + f + " of class " + obj);
         }
 
-        @NonNull OptionGroupInfo ogi = groupMap.get(currentGroup);
+        @NonNull OptionGroupInfo ogi = groupNameToOptionGroup.get(currentGroup);
         ogi.optionList.add(oi);
       } // loop through fields
     } // loop through args
@@ -804,27 +863,57 @@ public class Options {
     // Add each option to the option name map
     for (OptionInfo oi : options) {
       if (oi.shortName != null) {
-        if (nameMap.containsKey("-" + oi.shortName)) {
+        String shortOptionName = "-" + oi.shortName;
+        if (nameToOption.containsKey(shortOptionName)) {
           throw new Error("short name " + oi + " appears twice");
         }
-        nameMap.put("-" + oi.shortName, oi);
+        nameToOption.put(shortOptionName, oi);
       }
-      if (nameMap.containsKey(prefix + oi.longName)) {
+      String longOptionName = prefix + oi.longName;
+      if (nameToOption.containsKey(longOptionName)) {
         throw new Error("long name " + oi + " appears twice");
       }
-      nameMap.put(prefix + oi.longName, oi);
+      nameToOption.put(longOptionName, oi);
       if (useDashes && oi.longName.contains("-")) {
-        nameMap.put(prefix + oi.longName.replace('-', '_'), oi);
+        nameToOption.put(prefix + oi.longName.replace('-', '_'), oi);
       }
       if (oi.aliases.length > 0) {
         for (String alias : oi.aliases) {
-          if (nameMap.containsKey(alias)) {
+          if (nameToOption.containsKey(alias)) {
             throw new Error("alias " + oi + " appears twice");
           }
-          nameMap.put(alias, oi);
+          nameToOption.put(alias, oi);
         }
       }
     }
+  }
+
+  /**
+   * Converts a Java field name to a (long) option name. The option name uses '_' to separate words.
+   *
+   * @param fieldName the name of the field
+   * @return the (long) name of the option
+   */
+  /* package-protected */ static String fieldNameToOptionName(String fieldName) {
+    String optionName = fieldName;
+    if (optionName.indexOf('_') == -1
+        && !optionName.equals(optionName.toLowerCase(Locale.getDefault()))) {
+      // optionName contains no underscores, but does contain a capital letter.
+      // Insert an underscore before each capital letter, which is downcased.
+      StringBuilder lnb = new StringBuilder();
+      int optionNameLength = optionName.length();
+      for (int i = 0; i < optionNameLength; i++) {
+        char ch = optionName.charAt(i);
+        if (Character.isUpperCase(ch)) {
+          lnb.append('_');
+          lnb.append(Character.toLowerCase(ch));
+        } else {
+          lnb.append(ch);
+        }
+      }
+      optionName = lnb.toString();
+    }
+    return optionName;
   }
 
   /**
@@ -841,7 +930,7 @@ public class Options {
       Field f, Class<T> annotationClass) {
     @Nullable T annotation;
     try {
-      // @SuppressWarnings("nullness:initialization.invalid.cast")
+      // @SuppressWarnings("nullness:initialization.cast")
       @Nullable T cast = f.getAnnotation((Class<@NonNull T>) annotationClass);
       annotation = cast;
     } catch (Exception e) {
@@ -860,27 +949,13 @@ public class Options {
     return annotation;
   }
 
-  /** Print the classpath. */
-  static void printClassPath() {
-    URLClassLoader sysLoader = (URLClassLoader) ClassLoader.getSystemClassLoader();
-    if (sysLoader == null) {
-      System.out.println(
-          "No system class loader. (Maybe means bootstrap class loader is being used?)");
-    } else {
-      System.out.println("Classpath:");
-      for (URL url : sysLoader.getURLs()) {
-        System.out.println(url.getFile());
-      }
-    }
-  }
-
   /**
    * If true, Options will parse arguments even after a non-option command-line argument. Setting
    * this to true is useful to permit users to write options at the end of a command line. Setting
    * this to false is useful to avoid processing arguments that are actually options/arguments for
    * another program that this one will invoke. The default is true.
    *
-   * @param val whether to parse arguments after a non-option command-line argument
+   * @param val if true, parse arguments after a non-option command-line argument
    */
   public void setParseAfterArg(boolean val) {
     parseAfterArg = val;
@@ -893,7 +968,7 @@ public class Options {
    * options will be parsed with a double dash prefix as in <span style="white-space:
    * nowrap;">{@code --longOption}</span>.
    *
-   * @param val whether to parse long options with a single dash, as in <span style="white-space:
+   * @param val if true, parse long options with a single dash, as in <span style="white-space:
    *     nowrap;">{@code -longOption}</span>
    */
   public void setUseSingleDash(boolean val) {
@@ -901,11 +976,106 @@ public class Options {
   }
 
   /**
-   * Sets option variables from the given command line.
+   * Returns the tokens (command-line flags and arguments) in the given argument string, respecting
+   * single and double quotes. Tokens are separated by whitespace. Text between a pair of single
+   * quotes or a pair of double quotes is part of the current token, even if it contains whitespace
+   * or the other quote character; the quote characters themselves are not part of the token. For
+   * example, {@code --file='my file' it"'"s} yields the two tokens {@code --file=my file} and
+   * {@code it's}.
    *
-   * @param args the commandline to be parsed
+   * <p>Unlike in a shell, there is no escape character: a backslash is an ordinary character, both
+   * inside and outside quotes. To include a quote character in a token, enclose it in the other
+   * kind of quotes.
+   *
+   * <p>Quoting affects only how the argument string is split into tokens. For example, {@link
+   * #parse} splits an option token at {@code ,-}, so it splits {@code --file='a,-b'} (which this
+   * method converts into {@code --file=a,-b}) into {@code --file=a} and {@code -b}. To supply a
+   * value that contains {@code ,-}, write the value as a separate token, as in {@code --file
+   * 'a,-b'}.
+   *
+   * <p>This method is only appropriate when the {@code String[]} version of the arguments is not
+   * available &mdash; for example, for the {@code premain} method of a Java agent.
+   *
+   * @param args the command line to be tokenized
+   * @return a string array analogous to the argument to {@code main}
+   * @throws ArgException if the command line contains an unclosed quote
+   */
+  public static String[] tokenize(String args) throws ArgException {
+
+    // Split the args string on whitespace boundaries accounting for quoted
+    // strings.
+    List<String> argList = new ArrayList<>();
+    StringBuilder arg = new StringBuilder();
+    // True if the current argument has started.  It can be empty, as for ''.
+    boolean inArg = false;
+    for (int ii = 0; ii < args.length(); ii++) {
+      char ch = args.charAt(ii);
+      if ((ch == '\'') || (ch == '"')) {
+        int closeQuote = args.indexOf(ch, ii + 1);
+        if (closeQuote == -1) {
+          throw new ArgException(
+              "Unclosed %s quote at index %d in command line: %s",
+              (ch == '\'') ? "single" : "double", ii, args);
+        }
+        arg.append(args, ii + 1, closeQuote);
+        ii = closeQuote;
+        inArg = true;
+      } else if (Character.isWhitespace(ch)) {
+        if (inArg) {
+          argList.add(arg.toString());
+          arg.setLength(0);
+          inArg = false;
+        }
+      } else { // must be part of current argument
+        arg.append(ch);
+        inArg = true;
+      }
+    }
+    if (inArg) {
+      argList.add(arg.toString());
+    }
+
+    String[] argsArray = argList.toArray(new String[0]);
+    return argsArray;
+  }
+
+  /**
+   * Returns the given text, quoted if necessary so that {@link #tokenize} converts the result back
+   * into the text itself, as a token or as part of a token. The text is returned unchanged if it is
+   * non-empty and contains no whitespace or quote characters. The result is never empty, so it is a
+   * token even if the text is empty.
+   *
+   * @param s a text to quote
+   * @return the text, quoted if necessary
+   */
+  private static String quote(String s) {
+    boolean needsQuotes = s.isEmpty();
+    for (int ii = 0; ii < s.length(); ii++) {
+      char ch = s.charAt(ii);
+      if ((ch == '\'') || (ch == '"') || Character.isWhitespace(ch)) {
+        needsQuotes = true;
+        break;
+      }
+    }
+    if (!needsQuotes) {
+      return s;
+    } else if (s.indexOf('\'') == -1) {
+      return "'" + s + "'";
+    } else if (s.indexOf('"') == -1) {
+      return "\"" + s + "\"";
+    } else {
+      // Close the single-quoted text, add a double-quoted single quote, and reopen.
+      return "'" + s.replace("'", "'\"'\"'") + "'";
+    }
+  }
+
+  /**
+   * Sets option variables from the given command line. This method should only be called once on
+   * any given {@code Options} value.
+   *
+   * @param args the command line to be parsed
    * @return all non-option arguments
-   * @throws ArgException if the command line contains unknown option or misused options
+   * @throws ArgException if the command line contains an unknown or misused option
    */
   public String[] parse(String[] args) throws ArgException {
 
@@ -920,7 +1090,7 @@ public class Options {
     for (int ii = 0; ii < args.length; ) {
       // If there was a ',' separator in previous arg, use the tail as
       // current arg; otherwise, fetch the next arg from args list.
-      if (tail.length() > 0) {
+      if (!tail.isEmpty()) {
         arg = tail;
         tail = "";
       } else {
@@ -929,7 +1099,7 @@ public class Options {
 
       if (arg.equals("--")) {
         ignoreOptions = true;
-      } else if ((arg.startsWith("--") || arg.startsWith("-")) && !ignoreOptions) {
+      } else if (arg.startsWith("-") && !ignoreOptions) {
         String argName;
         String argValue;
 
@@ -937,7 +1107,7 @@ public class Options {
         // some command line quoting problems.  (markro)
         int splitPos = arg.indexOf(",-");
         if (splitPos == 0) {
-          // Just discard the ',' if ",-" occurs at begining of string
+          // Just discard the ',' if ",-" occurs at beginning of string
           arg = arg.substring(1);
           splitPos = arg.indexOf(",-");
         }
@@ -954,29 +1124,35 @@ public class Options {
           argName = arg.substring(0, eqPos);
           argValue = arg.substring(eqPos + 1);
         }
-        OptionInfo oi = nameMap.get(argName);
+        OptionInfo oi = nameToOption.get(argName);
         if (oi == null) {
-          StringBuilder msg = new StringBuilder();
-          msg.append(String.format("unknown option name '%s' in arg '%s'", argName, arg));
-          if (false) { // for debugging
+          StringBuilder msg = new StringBuilder(64);
+          msg.append("unknown option name '")
+              .append(argName)
+              .append("' in arg '")
+              .append(arg)
+              .append('\'');
+          if (debugEnabled) {
             msg.append("; known options:");
-            for (String optionName : sortedKeySet(nameMap)) {
-              msg.append(" ");
+            for (String optionName : sortedKeySet(nameToOption)) {
+              msg.append(' ');
               msg.append(optionName);
             }
           }
           throw new ArgException(msg.toString());
         }
+        boolean valueIsSeparateToken = false;
         if (oi.argumentRequired() && (argValue == null)) {
           ii++;
           if (ii >= args.length) {
             throw new ArgException("option %s requires an argument", arg);
           }
           argValue = args[ii];
+          valueIsSeparateToken = true;
         }
         // System.out.printf ("argName = '%s', argValue='%s'%n", argName,
         //                    argValue);
-        setArg(oi, argName, argValue);
+        setArg(oi, argName, argValue, valueIsSeparateToken);
       } else { // not an option
         if (!parseAfterArg) {
           ignoreOptions = true;
@@ -985,63 +1161,12 @@ public class Options {
       }
 
       // If no ',' tail, advance to next args option
-      if (tail.length() == 0) {
+      if (tail.isEmpty()) {
         ii++;
       }
     }
-    String[] result = nonOptions.toArray(new String[nonOptions.size()]);
+    String[] result = nonOptions.toArray(new String[0]);
     return result;
-  }
-
-  /**
-   * Splits the argument string into an array of tokens (command-line flags and arguments),
-   * respecting single and double quotes.
-   *
-   * <p>This method is only appropriate when the {@code String[]} version of the arguments is not
-   * available &mdash; for example, for the {@code premain} method of a Java agent.
-   *
-   * @param args the command line to be tokenized
-   * @return a string array analogous to the argument to {@code main}.
-   */
-  // TODO: should this throw some exceptions?
-  public static String[] tokenize(String args) {
-
-    // Split the args string on whitespace boundaries accounting for quoted
-    // strings.
-    args = args.trim();
-    List<String> argList = new ArrayList<>();
-    String arg = "";
-    for (int ii = 0; ii < args.length(); ii++) {
-      char ch = args.charAt(ii);
-      if ((ch == '\'') || (ch == '"')) {
-        arg += ch;
-        ii++;
-        while ((ii < args.length()) && (args.charAt(ii) != ch)) {
-          arg += args.charAt(ii++);
-        }
-        arg += ch;
-      } else if (Character.isWhitespace(ch)) {
-        // System.out.printf ("adding argument '%s'%n", arg);
-        argList.add(arg);
-        arg = "";
-        while ((ii < args.length()) && Character.isWhitespace(args.charAt(ii))) {
-          ii++;
-        }
-        if (ii < args.length()) {
-          // Encountered a non-whitespace character.
-          // Back up to process it on the next loop iteration.
-          ii--;
-        }
-      } else { // must be part of current argument
-        arg += ch;
-      }
-    }
-    if (!arg.equals("")) {
-      argList.add(arg);
-    }
-
-    String[] argsArray = argList.toArray(new String[argList.size()]);
-    return argsArray;
   }
 
   /**
@@ -1080,8 +1205,8 @@ public class Options {
    * Sets option variables from the given command line; if any command-line argument is illegal,
    * prints the usage message and terminates the program.
    *
-   * <p>If an error occurs and {@code showUsageOnError} is true, prints the exception's message,
-   * prints usage inoframtion, and then terminates the program. The program is terminated rather
+   * <p>If an error occurs, prints the exception's message, and if {@code showUsageOnError} is true,
+   * prints usage information, and then terminates the program. The program is terminated rather
    * than throwing an error to create cleaner output.
    *
    * @param showUsageOnError if a command-line argument is incorrect, print a usage message
@@ -1100,15 +1225,16 @@ public class Options {
       if (exceptionMessage != null) {
         System.out.println(exceptionMessage);
       }
-      printUsage();
+      if (showUsageOnError) {
+        printUsage();
+      }
       System.exit(-1);
-      // throw new Error ("usage error: ", ae);
     }
     return nonOptions;
   }
 
   /**
-   * True if some documented option accepts a list as a parameter. Used and set by {code usage()}
+   * True if some documented option accepts a list as a parameter. Used and set by {@code usage()}
    * methods and their callees.
    */
   private boolean hasListOption = false;
@@ -1139,11 +1265,11 @@ public class Options {
   /**
    * Returns a usage message for command-line options.
    *
-   * @return the command-line usage message
    * @param groupNames the list of option groups to include in the usage message. If empty and
    *     option groups are being used, will return usage for all option groups that are not
    *     unpublicized. If empty and option groups are not being used, will return usage for all
    *     options that are not unpublicized.
+   * @return the command-line usage message
    */
   public String usage(String... groupNames) {
     return usage(false, groupNames);
@@ -1152,12 +1278,12 @@ public class Options {
   /**
    * Returns a usage message for command-line options.
    *
-   * @return the command-line usage message
    * @param showUnpublicized if true, treat all unpublicized options and option groups as publicized
    * @param groupNames the list of option groups to include in the usage message. If empty and
    *     option groups are being used, will return usage for all option groups that are not
    *     unpublicized. If empty and option groups are not being used, will return usage for all
    *     options that are not unpublicized.
+   * @return the command-line usage message
    */
   public String usage(boolean showUnpublicized, String... groupNames) {
     if (!hasGroups) {
@@ -1171,19 +1297,19 @@ public class Options {
     List<OptionGroupInfo> groups = new ArrayList<>();
     if (groupNames.length > 0) {
       for (String groupName : groupNames) {
-        if (!groupMap.containsKey(groupName)) {
+        if (!groupNameToOptionGroup.containsKey(groupName)) {
           throw new IllegalArgumentException("invalid option group: " + groupName);
         }
-        OptionGroupInfo gi = groupMap.get(groupName);
+        OptionGroupInfo gi = groupNameToOptionGroup.get(groupName);
         if (!showUnpublicized && !gi.anyPublicized()) {
           throw new IllegalArgumentException(
               "group does not contain any publicized options: " + groupName);
         } else {
-          groups.add(groupMap.get(groupName));
+          groups.add(gi);
         }
       }
     } else { // return usage for all groups that are not unpublicized
-      for (OptionGroupInfo gi : groupMap.values()) {
+      for (OptionGroupInfo gi : groupNameToOptionGroup.values()) {
         if ((gi.unpublicized || !gi.anyPublicized()) && !showUnpublicized) {
           continue;
         }
@@ -1191,11 +1317,10 @@ public class Options {
       }
     }
 
-    List<Integer> lengths = new ArrayList<>();
+    int maxLength = 0;
     for (OptionGroupInfo gi : groups) {
-      lengths.add(maxOptionLength(gi.optionList, showUnpublicized));
+      maxLength = Math.max(maxLength, maxOptionLength(gi.optionList, showUnpublicized));
     }
-    int maxLength = Collections.max(lengths);
 
     StringJoiner buf = new StringJoiner(lineSeparator);
     for (OptionGroupInfo gi : groups) {
@@ -1215,6 +1340,7 @@ public class Options {
    * @param showUnpublicized if true, include unpublicized options in the output
    * @return the formatted options
    */
+  @SuppressWarnings("PMD.UnusedAssignment") // false positive, `hasListOption` is read elsewhere
   private String formatOptions(List<OptionInfo> optList, int maxLength, boolean showUnpublicized) {
     StringJoiner buf = new StringJoiner(lineSeparator);
     for (OptionInfo oi : optList) {
@@ -1239,7 +1365,7 @@ public class Options {
   }
 
   /**
-   * Return the length of the longest synopsis message in a list of options. Useful for aligning
+   * Returns the length of the longest synopsis message in a list of options. Useful for aligning
    * options in usage strings.
    *
    * @param optList the options whose synopsis messages to measure
@@ -1264,7 +1390,7 @@ public class Options {
   // generate HTML documentation.
 
   /**
-   * Return whether option groups are being used.
+   * Returns true if option groups are being used.
    *
    * @return true if option groups are being used
    */
@@ -1274,7 +1400,7 @@ public class Options {
   }
 
   /**
-   * Return whether single dashes are being used.
+   * Returns true if single dashes are being used.
    *
    * @return true if single dashes are being used
    */
@@ -1284,7 +1410,7 @@ public class Options {
   }
 
   /**
-   * Return all the defined options
+   * Returns all the defined options.
    *
    * @return all the defined options
    */
@@ -1293,12 +1419,12 @@ public class Options {
   }
 
   /**
-   * Return all the option groups
+   * Returns all the option groups.
    *
    * @return all the option groups
    */
   Collection<OptionGroupInfo> getOptionGroups() {
-    return groupMap.values();
+    return groupNameToOptionGroup.values();
   }
 
   /**
@@ -1307,37 +1433,33 @@ public class Options {
    * @param oi the option to set
    * @param argName the name of the argument as passed on the command line; used only for debugging
    * @param argValue a string representation of the value
+   * @param valueIsSeparateToken true if argValue was supplied as a separate token, as in {@code
+   *     --name value}, rather than in the same token as argName, as in {@code --name=value}
    * @throws ArgException if there are any errors
    */
   @SuppressWarnings({
-    "nullness:argument.type.incompatible", // object can be null if field is static
-    "interning:argument.type.incompatible" // interning is not relevant to the call
+    "nullness:argument", // object can be null if field is static
+    "interning:argument" // interning is not relevant to the call
   })
-  private void setArg(OptionInfo oi, String argName, @Nullable String argValue)
+  private void setArg(
+      OptionInfo oi, String argName, @Nullable String argValue, boolean valueIsSeparateToken)
       throws ArgException {
 
     Field f = oi.field;
     Class<?> type = oi.baseType;
 
-    // Keep track of all of the options specified
-    if (optionsString.length() > 0) {
-      optionsString += " ";
+    if (!optionsString.isEmpty()) {
+      optionsString.append(' ');
     }
-    optionsString += argName;
+    optionsString.append(argName);
     if (argValue != null) {
-      if (!argValue.contains(" ")) {
-        optionsString += "=" + argValue;
-      } else if (!argValue.contains("'")) {
-        optionsString += "='" + argValue + "'";
-      } else if (!argValue.contains("\"")) {
-        optionsString += "=\"" + argValue + "\"";
-      } else {
-        throw new ArgException("Can't quote for internal debugging: " + argValue);
-      }
+      // Emit the value as it was supplied.  A value in the same token as the option name would not
+      // round-trip if it contained ",-", because `parse` splits such a token at ",-".
+      optionsString.append(valueIsSeparateToken ? ' ' : '=').append(quote(argValue));
     }
     // Argument values are required for everything but booleans
     if (argValue == null) {
-      if ((type != Boolean.TYPE) || (type != Boolean.class)) {
+      if ((type == Boolean.TYPE) || (type == Boolean.class)) {
         argValue = "true";
       } else {
         throw new ArgException("Value required for option " + argName);
@@ -1346,94 +1468,23 @@ public class Options {
 
     try {
       if (type.isPrimitive()) {
-        if (type == Boolean.TYPE) {
-          boolean val;
-          String argValueLowercase = argValue.toLowerCase();
-          if (argValueLowercase.equals("true") || argValueLowercase.equals("t")) {
-            val = true;
-          } else if (argValueLowercase.equals("false") || argValueLowercase.equals("f")) {
-            val = false;
-          } else {
-            throw new ArgException(
-                "Value \"%s\" for argument %s is not a boolean", argValue, argName);
-          }
-          argValue = val ? "true" : "false";
-          // System.out.printf ("Setting %s to %s%n", argName, val);
-          f.setBoolean(oi.obj, val);
-        } else if (type == Byte.TYPE) {
-          byte val;
-          try {
-            val = Byte.decode(argValue);
-          } catch (Exception e) {
-            throw new ArgException("Value \"%s\" for argument %s is not a byte", argValue, argName);
-          }
-          f.setByte(oi.obj, val);
-        } else if (type == Character.TYPE) {
-          if (argValue.length() != 1) {
-            throw new ArgException(
-                "Value \"%s\" for argument %s is not a single character", argValue, argName);
-          }
-          char val = argValue.charAt(0);
-          f.setChar(oi.obj, val);
-        } else if (type == Short.TYPE) {
-          short val;
-          try {
-            val = Short.decode(argValue);
-          } catch (Exception e) {
-            throw new ArgException(
-                "Value \"%s\" for argument %s is not a short integer", argValue, argName);
-          }
-          f.setShort(oi.obj, val);
-        } else if (type == Integer.TYPE) {
-          int val;
-          try {
-            val = Integer.decode(argValue);
-          } catch (Exception e) {
-            throw new ArgException(
-                "Value \"%s\" for argument %s is not an integer", argValue, argName);
-          }
-          f.setInt(oi.obj, val);
-        } else if (type == Long.TYPE) {
-          long val;
-          try {
-            val = Long.decode(argValue);
-          } catch (Exception e) {
-            throw new ArgException(
-                "Value \"%s\" for argument %s is not a long integer", argValue, argName);
-          }
-          f.setLong(oi.obj, val);
-        } else if (type == Float.TYPE) {
-          Float val;
-          try {
-            val = Float.valueOf(argValue);
-          } catch (Exception e) {
-            throw new ArgException(
-                "Value \"%s\" for argument %s is not a float", argValue, argName);
-          }
-          f.setFloat(oi.obj, val);
-        } else if (type == Double.TYPE) {
-          Double val;
-          try {
-            val = Double.valueOf(argValue);
-          } catch (Exception e) {
-            throw new ArgException(
-                "Value \"%s\" for argument %s is not a double", argValue, argName);
-          }
-          f.setDouble(oi.obj, val);
-        } else { // unexpected type
-          throw new Error("Unexpected type " + type);
-        }
+        // Field.set performs the unwrapping conversion to the field's primitive type.
+        f.set(oi.obj, getScalarArg(type, argName, argValue));
       } else { // reference type
 
         // If the argument is a list, add repeated arguments or multiple
         // blank separated arguments to the list, otherwise just set the
         // argument value.
         if (oi.list != null) {
+          if (oi.listIsDefault) {
+            oi.list.clear();
+            oi.listIsDefault = false;
+          }
           if (spaceSeparatedLists) {
-            String[] aarr = argValue.split(" +");
+            String[] aarr = argValue.trim().split(" +", -1);
             for (String aval : aarr) {
               Object val = getRefArg(oi, argName, aval);
-              oi.list.add(val); // uncheck cast
+              oi.list.add(val); // unchecked cast
             }
           } else {
             Object val = getRefArg(oi, argName, argValue);
@@ -1452,6 +1503,81 @@ public class Options {
   }
 
   /**
+   * Given a value string supplied on the command line, create a value of a primitive type or of a
+   * primitive type wrapper.
+   *
+   * <p>A primitive type and its wrapper are converted identically, so that (for example) {@code
+   * int} and {@code Integer} accept the same command-line arguments. The integral types accept the
+   * formats of {@link Integer#decode}: decimal, hexadecimal (prefix {@code 0x}, {@code 0X}, or
+   * {@code #}), and octal (prefix {@code 0}).
+   *
+   * @param type a primitive type, or one of {@link #PRIMITIVE_WRAPPERS}
+   * @param argName the argument name -- used only for diagnostics
+   * @param argValue the command-line argument
+   * @return a value of the given type, whose printed representation is {@code argValue}
+   * @throws ArgException if {@code argValue} is not parsable as {@code type}
+   */
+  private static Object getScalarArg(Class<?> type, String argName, String argValue)
+      throws ArgException {
+    if (type == Boolean.TYPE || type == Boolean.class) {
+      String argValueLowercase = argValue.toLowerCase(Locale.getDefault());
+      if (argValueLowercase.equals("true") || argValueLowercase.equals("t")) {
+        return true;
+      } else if (argValueLowercase.equals("false") || argValueLowercase.equals("f")) {
+        return false;
+      } else {
+        throw new ArgException("Value \"%s\" for argument %s is not a boolean", argValue, argName);
+      }
+    } else if (type == Byte.TYPE || type == Byte.class) {
+      try {
+        return Byte.decode(argValue);
+      } catch (Exception e) {
+        throw new ArgException("Value \"%s\" for argument %s is not a byte", argValue, argName);
+      }
+    } else if (type == Character.TYPE || type == Character.class) {
+      if (argValue.length() != 1) {
+        throw new ArgException(
+            "Value \"%s\" for argument %s is not a single character", argValue, argName);
+      }
+      return argValue.charAt(0);
+    } else if (type == Short.TYPE || type == Short.class) {
+      try {
+        return Short.decode(argValue);
+      } catch (Exception e) {
+        throw new ArgException(
+            "Value \"%s\" for argument %s is not a short integer", argValue, argName);
+      }
+    } else if (type == Integer.TYPE || type == Integer.class) {
+      try {
+        return Integer.decode(argValue);
+      } catch (Exception e) {
+        throw new ArgException("Value \"%s\" for argument %s is not an integer", argValue, argName);
+      }
+    } else if (type == Long.TYPE || type == Long.class) {
+      try {
+        return Long.decode(argValue);
+      } catch (Exception e) {
+        throw new ArgException(
+            "Value \"%s\" for argument %s is not a long integer", argValue, argName);
+      }
+    } else if (type == Float.TYPE || type == Float.class) {
+      try {
+        return Float.valueOf(argValue);
+      } catch (Exception e) {
+        throw new ArgException("Value \"%s\" for argument %s is not a float", argValue, argName);
+      }
+    } else if (type == Double.TYPE || type == Double.class) {
+      try {
+        return Double.valueOf(argValue);
+      } catch (Exception e) {
+        throw new ArgException("Value \"%s\" for argument %s is not a double", argValue, argName);
+      }
+    } else { // unexpected type
+      throw new Error("Unexpected type " + type);
+    }
+  }
+
+  /**
    * Given a value string supplied on the command line, create an object. The only expected error is
    * some sort of parse error from the constructor.
    *
@@ -1465,10 +1591,20 @@ public class Options {
   private @NonNull Object getRefArg(OptionInfo oi, String argName, String argValue)
       throws ArgException {
 
+    // Converted like the corresponding primitive type, rather than by a constructor or factory.
+    if (PRIMITIVE_WRAPPERS.contains(oi.baseType)) {
+      return getScalarArg(oi.baseType, argName, argValue);
+    }
+
     Object val;
     try {
       if (oi.constructor != null) {
-        val = oi.constructor.newInstance(new Object[] {argValue});
+        @SuppressWarnings({
+          "signedness:assignment", // assume command-line numeric args are signed
+          "PMD.UnnecessaryVarargsArrayCreation" // false positive due to overloads
+        })
+        @Signed Object signedVal = oi.constructor.newInstance(new Object[] {argValue});
+        val = signedVal;
       } else if (oi.baseType.isEnum()) {
         @SuppressWarnings({"unchecked", "rawtypes"})
         Object tmpVal = getEnumValue((Class<Enum>) oi.baseType, argValue);
@@ -1505,8 +1641,9 @@ public class Options {
     if (constants == null) {
       throw new IllegalArgumentException(enumType.getName() + " is not an enum type");
     }
+    String nameWithUnderscores = name.replace('-', '_');
     for (T constant : constants) {
-      if (constant.name().equalsIgnoreCase(name.replace('-', '_'))) {
+      if (constant.name().equalsIgnoreCase(nameWithUnderscores)) {
         return constant;
       }
     }
@@ -1516,11 +1653,11 @@ public class Options {
   }
 
   /**
-   * Return a short name for the specified type for use in messages. This is usually the lowercase
+   * Returns a short name for the specified type for use in messages. This is usually the lowercase
    * simple name of the type, but there are special cases (for files, regular expressions, enums,
    * ...).
    *
-   * @param type the type whoso short name to return
+   * @param type the type whose short name to return
    * @return a short name for the specified type for use in messages
    */
   private static String typeShortName(Class<?> type) {
@@ -1534,44 +1671,53 @@ public class Options {
     } else if (type.isEnum()) {
       return "enum";
     } else {
-      return type.getSimpleName().toLowerCase();
+      return type.getSimpleName().toLowerCase(Locale.getDefault());
     }
   }
 
   /**
    * Returns a string containing all of the options that were set and their arguments. This is
-   * essentially the contents of args[] with all non-options removed. It can be used for calling a
-   * subprocess or for debugging.
+   * essentially the contents of args[] with all non-options removed. Each argument is quoted if
+   * necessary, so {@link #tokenize} converts the result into the options and arguments that were
+   * supplied. It can be used for calling a subprocess or for debugging.
    *
-   * @return options, similarly to supplied on the command line
+   * @return the options that were set and their arguments, in a form that {@link #tokenize} accepts
    * @see #settings()
    */
   public String getOptionsString() {
-    return optionsString;
+    return optionsString.toString();
   }
 
-  // TODO: document what this is good for.  Debugging?  Invoking other programs?
   /**
-   * Returns a string containing the current setting for each option, in command-line format that
-   * can be parsed by Options. Contains every known option even if the option was not specified on
-   * the command line. Never contains duplicates.
+   * Returns a string containing the current setting of each option, omitting options annotated with
+   * {@code @}{@link Unpublicized}. Equivalent to {@code settings(false)}.
    *
-   * @return a command line that can be tokenized with {@link #tokenize}, containing the current
-   *     setting for each option
+   * @return the current setting of each option, one per line
+   * @see #settings(boolean)
    */
   public String settings() {
     return settings(false);
   }
 
-  // TODO: document what this is good for.  Debugging?  Invoking other programs?
   /**
-   * Returns a string containing the current setting for each option, in command-line format that
-   * can be parsed by Options. Contains every known option even if the option was not specified on
-   * the command line. Never contains duplicates.
+   * Returns a string containing the current setting of each option, optionally omitting options
+   * annotated with {@code @}{@link Unpublicized}. This is useful for debugging and logging.
    *
-   * @param showUnpublicized if true, treat all unpublicized options and option groups as publicized
-   * @return a command line that can be tokenized with {@link #tokenize}, containing the current
-   *     setting for each option
+   * <p>Each option appears on its own line, in the form {@code name = value}, where {@code name} is
+   * the option's long name and {@code value} is its current value. Each name is padded with spaces
+   * so that the {@code =} signs line up. Each included option appears exactly once, whether or not
+   * it was specified on the command line.
+   *
+   * <p>If {@code showUnpublicized} is false, the result omits each option that has an
+   * {@code @}{@link Unpublicized} annotation. Unlike {@link #usage(boolean, String...)}, this
+   * method does not consider whether an option's group is unpublicized.
+   *
+   * <p>The result is not a command line. To obtain the options that were set, formatted as
+   * command-line arguments, use {@link #getOptionsString}.
+   *
+   * @param showUnpublicized true if the result should include options annotated with
+   *     {@code @}{@link Unpublicized}
+   * @return the current setting of each included option, one per line
    */
   public String settings(boolean showUnpublicized) {
     StringJoiner out = new StringJoiner(lineSeparator);
@@ -1581,6 +1727,9 @@ public class Options {
 
     // Create the settings string
     for (OptionInfo oi : options) {
+      if (oi.unpublicized && !showUnpublicized) {
+        continue;
+      }
       @SuppressWarnings("formatter") // format string computed from maxLength
       String use =
           String.format("%-" + maxLength + "s = %s", oi.longName, fieldGet(oi.field, oi.obj));
@@ -1591,7 +1740,7 @@ public class Options {
   }
 
   /**
-   * Return a description of all of the known options. Each option is described on its own line in
+   * Returns a description of all of the known options. Each option is described on its own line in
    * the output.
    *
    * @return a description of all of the known options
@@ -1617,6 +1766,7 @@ public class Options {
    * than the message string.
    */
   public static class ArgException extends Exception {
+    /** Unique identifier for serialization. If you add or remove fields, change this number. */
     static final long serialVersionUID = 20051223L;
 
     /**
@@ -1641,28 +1791,15 @@ public class Options {
     }
   }
 
-  /** The result of parsing the argument to {@code @Option}. */
-  private static class ParseResult {
-    /** The short name of an option, or null if none. */
-    @Nullable String shortName;
-    /** The type name of an option, or null if none. */
-    @Nullable String typeName;
-    /** The description of an option. */
-    String description;
-
-    /**
-     * Create a new ParseResult.
-     *
-     * @param shortName the short name of an option, or null if none
-     * @param typeName the type name of an option, or null if none
-     * @param description the description of an option
-     */
-    ParseResult(@Nullable String shortName, @Nullable String typeName, String description) {
-      this.shortName = shortName;
-      this.typeName = typeName;
-      this.description = description;
-    }
-  }
+  /**
+   * The result of parsing the argument to {@code @Option}.
+   *
+   * @param shortName the short name of an option, or null if none
+   * @param typeName the type name of an option, or null if none
+   * @param description the description of an option
+   */
+  private record ParseResult(
+      @Nullable String shortName, @Nullable String typeName, String description) {}
 
   /**
    * Parse an option value (the argument to {@code @Option}) and return its three components
@@ -1676,7 +1813,6 @@ public class Options {
 
     // Get the short name, long name, and description
     String shortName;
-    String typeName;
     @NonNull String description;
 
     // Get the short name (if any)
@@ -1695,7 +1831,8 @@ public class Options {
       description = val;
     }
 
-    // Get the type name (if any)
+    // Get the type name (if any).
+    String typeName;
     if (description.startsWith("<")) {
       typeName = description.substring(1).replaceFirst(">.*", "");
       description = description.replaceFirst("<.*> ", "");
@@ -1706,29 +1843,6 @@ public class Options {
     // Return the result
     return new ParseResult(shortName, typeName, description);
   }
-
-  //   /**
-  //    * Test class with some defined arguments.
-  //    */
-  //   private static class Test {
-  //
-  //     @Option("generic") List<Pattern> lp = new ArrayList<>();
-  //     @Option("-a <filename> argument 1") String arg1 = "/tmp/foobar";
-  //     @Option("argument 2") String arg2;
-  //     @Option("-d double value") double temperature;
-  //     @Option("-f the input file") File input_file;
-  //   }
-  //
-  //   /**
-  //    * Simple example
-  //    */
-  //   private static void main (String[] args) throws ArgException {
-  //
-  //     Options options = new Options("test", new Test());
-  //     System.out.printf("Options:%n%s", options);
-  //     options.parse(true, args);
-  //     System.out.printf("Results:%n%s", options.settings());
-  //   }
 
   /**
    * Returns a sorted version of m.keySet().
@@ -1763,7 +1877,35 @@ public class Options {
     try {
       return field.get(obj);
     } catch (Exception e) {
+      // TODO: Accessibility problems could be related to the field or to the class itself.
+      // This should diagnose those problems and report them (though accessibility is not the only
+      // possible problem here).
       throw new Error("Unexpected error reading " + field + " in " + obj, e);
+    }
+  }
+
+  /**
+   * Sets the value of the field represented by this Field, on the specified object. Wraps {@code
+   * Field.set}, but throws no exceptions other than an informative Error.
+   *
+   * @param field the field to set
+   * @param obj object whose field is to be set; may be null if the field is static
+   * @param value the new value for the field {@code field} of {@code obj} being modified
+   */
+  @SuppressWarnings({
+    "nullness", // should not be called with non-static field and null obj, but if so, the
+    // exception is caught and handled
+    "interning:argument" // interning is not relevant to the call to `Field.set()`
+  })
+  private static void fieldSet(
+      Field field, @UnknownInitialization @Nullable Object obj, @Nullable Object value) {
+    try {
+      field.set(obj, value);
+    } catch (Exception e) {
+      // TODO: Accessibility problems could be related to the field or to the class itself.
+      // This should diagnose those problems and report them (though accessibility is not the only
+      // possible problem here).
+      throw new Error("Unexpected error setting " + field + " in " + obj + " to " + value, e);
     }
   }
 }

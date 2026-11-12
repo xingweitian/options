@@ -6,12 +6,16 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.regex.Pattern;
+import org.checkerframework.checker.modifiability.qual.IteratorPolyMod;
+import org.checkerframework.checker.modifiability.qual.Modifiable;
 import org.checkerframework.checker.nullness.qual.Nullable;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+/** Test the Options package. */
 public class TestOptions {
 
   /** Test class for Options testing. */
@@ -32,7 +36,7 @@ public class TestOptions {
     public double temperature;
 
     @Option("-f the input file")
-    public @Nullable File input_file;
+    public @Nullable File inputFile;
 
     @Option("-g the input file")
     public @Nullable Path input_path;
@@ -41,13 +45,19 @@ public class TestOptions {
     public boolean bool;
 
     @Option("-i Integer")
-    public @Nullable Integer integer_reference;
+    public @Nullable Integer IntegerReference;
 
     @Option("list of doubles")
-    public List<Double> ld = new ArrayList<>();
+    public @Modifiable @IteratorPolyMod List<Double> ld = new ArrayList<>();
 
     @Option("list with no default")
     public @Nullable List<String> ls;
+
+    @Option("list with non-empty default")
+    public @Nullable List<String> ls2 = new ArrayList<>(Arrays.asList("Red", "Green", "Blue"));
+
+    @Option("list with immutable default")
+    public @Nullable List<String> ls3 = List.of("Red", "Green", "Blue");
   }
 
   /**
@@ -56,7 +66,7 @@ public class TestOptions {
    * @throws ArgException if there is an illegal argument
    */
   @Test
-  public void testOptions() throws ArgException, IOException {
+  void testOptions() throws ArgException, IOException {
 
     new File("/tmp/TestOptions1.txt").createNewFile();
     new File("/tmp/TestOptions2.txt").createNewFile();
@@ -90,7 +100,7 @@ public class TestOptions {
 
     assert t.lp.get(0).toString().equals("foo");
     assert t.lp.get(1).toString().equals("bar");
-    assert t.integer_reference != null && t.integer_reference.intValue() == 24;
+    assert t.IntegerReference != null && t.IntegerReference.intValue() == 24;
     assert t.temperature == 37.8;
     assert t.bool == false;
     assert t.ld.get(0).doubleValue() == 34.6;
@@ -134,18 +144,38 @@ public class TestOptions {
     assert t.ls.get(0).equals("hello");
     assert t.ls.get(1).equals("world");
 
+    // Test list with non-empty default
+    args = options.parse(new String[] {"--ls2", "hello", "--ls2", "world"});
+    assert args.length == 0 : "@AssumeAssertion(value)";
+    assert t.ls2 != null
+        : "@AssumeAssertion(nullness): application invariant: parsed string with --ls2 just above";
+    assert t.ls2.size() == 2;
+    assert t.ls2.get(0).equals("hello");
+    assert t.ls2.get(1).equals("world");
+
+    // Test list with unmodifiable default
+    args = options.parse(new String[] {"--ls3", "hello", "--ls3", "world"});
+    assert args.length == 0 : "@AssumeAssertion(value)";
+    assert t.ls3 != null
+        : "@AssumeAssertion(nullness): application invariant: parsed string with --ls3 just above";
+    assert t.ls3.size() == 2
+        : String.format(
+            "Expected size 2, got size %d: %s {%s}",
+            t.ls3.size(), t.ls3, System.identityHashCode(t.ls3));
+    assert t.ls3.get(0).equals("hello");
+    assert t.ls3.get(1).equals("world");
+
     // Test files and paths
-    assert t.input_file != null
+    assert t.inputFile != null
         : "@AssumeAssertion(nullness): application invariant: parsed string with --input-file";
-    assert t.input_file.exists();
-    assert t.input_file.getName().equals("TestOptions1.txt");
+    assert t.inputFile.exists();
+    assert t.inputFile.getName().equals("TestOptions1.txt");
     assert t.input_path != null
         : "@AssumeAssertion(nullness): application invariant: parsed string with --input-path";
     assert t.input_path.toFile().exists();
     assert t.input_path != null
         : "@AssumeAssertion(nullness): annotated JDK doesn't contain toFile() yet";
     assert t.input_path.toString().equals("/tmp/TestOptions2.txt");
-    ;
   }
 
   /** Test class for option alias testing. */
@@ -170,7 +200,7 @@ public class TestOptions {
    * @throws ArgException if there is an illegal argument
    */
   @Test
-  public void testOptionsAliases() throws ArgException {
+  void testOptionsAliases() throws ArgException {
     ClassWithOptionsAliases t = new ClassWithOptionsAliases();
     Options options = new Options("test", t);
 
@@ -276,7 +306,7 @@ public class TestOptions {
    * @throws ArgException if there is an illegal argument
    */
   @Test
-  public void testOptionGroups() throws ArgException {
+  void testOptionGroups() throws ArgException {
     // TODO: The following two exception tests are not adequate.  There must be
     // a better way to do these.
     try {
@@ -324,7 +354,7 @@ public class TestOptions {
     assert options2.usage(true).indexOf("Internal options") > -1;
   }
 
-  public static class ClassWithOptionsEnums {
+  static class ClassWithOptionsEnums {
     enum Compressor {
       RLE,
       SMART_RLE,
@@ -339,37 +369,307 @@ public class TestOptions {
   }
 
   @Test
-  public void testOptionsEnums() throws ArgException {
+  void testOptionsEnums() throws ArgException {
     Options options = new Options("test", ClassWithOptionsEnums.class);
 
-    options.parse(new String[] {"--firstPass", "SMART_RLE"});
+    options.parse(new String[] {"--first-pass", "SMART_RLE"});
     assert ClassWithOptionsEnums.firstPass == ClassWithOptionsEnums.Compressor.SMART_RLE;
     ClassWithOptionsEnums.firstPass = ClassWithOptionsEnums.Compressor.HUFFMAN;
 
-    options.parse(new String[] {"--firstPass", "smart_rle"});
+    options.parse(new String[] {"--first_pass", "smart_rle"});
     assert ClassWithOptionsEnums.firstPass == ClassWithOptionsEnums.Compressor.SMART_RLE;
     ClassWithOptionsEnums.firstPass = ClassWithOptionsEnums.Compressor.HUFFMAN;
 
-    options.parse(new String[] {"--firstPass", "smart-rle"});
+    options.parse(new String[] {"--first-pass", "smart-rle"});
     assert ClassWithOptionsEnums.firstPass == ClassWithOptionsEnums.Compressor.SMART_RLE;
 
-    options.parse(new String[] {"--firstPass", "rle", "--secondPass", "SMART-RLE"});
+    options.parse(new String[] {"--first_pass", "rle", "--second-pass", "SMART-RLE"});
     assert ClassWithOptionsEnums.firstPass == ClassWithOptionsEnums.Compressor.RLE;
     assert ClassWithOptionsEnums.secondPass == ClassWithOptionsEnums.Compressor.SMART_RLE;
 
-    options.parse(new String[] {"--secondPass", "Huffman"});
+    options.parse(new String[] {"--second-pass", "Huffman"});
     assert ClassWithOptionsEnums.firstPass == ClassWithOptionsEnums.Compressor.RLE;
     assert ClassWithOptionsEnums.secondPass == ClassWithOptionsEnums.Compressor.HUFFMAN;
   }
 
   @Test
-  public void testOptionsEnumsFail() throws ArgException {
+  void testOptionsEnumsFail() throws ArgException {
     Options options = new Options("test", ClassWithOptionsEnums.class);
     Assertions.assertThrows(
         ArgException.class,
         () -> {
-          // should fail: can not leave out _ or -
-          options.parse(new String[] {"--firstPass", "smartrle"});
+          // should fail: option argument cannot leave out _ or -
+          options.parse(new String[] {"--first-pass", "smartrle"});
         });
+    Assertions.assertThrows(
+        ArgException.class,
+        () -> {
+          // should fail: option name cannot leave out _ or -
+          options.parse(new String[] {"--firstpass", "smart-rle"});
+        });
+  }
+
+  static class ClassWithWrapperOptions {
+    @Option("a Boolean")
+    public @Nullable Boolean booleanWrapper;
+
+    @Option("a Byte")
+    public @Nullable Byte byteWrapper;
+
+    @Option("a Short")
+    public @Nullable Short shortWrapper;
+
+    @Option("an Integer")
+    public @Nullable Integer integerWrapper;
+
+    @Option("a Long")
+    public @Nullable Long longWrapper;
+
+    @Option("a Float")
+    public @Nullable Float floatWrapper;
+
+    @Option("a Double")
+    public @Nullable Double doubleWrapper;
+  }
+
+  /**
+   * Test that every supported primitive type wrapper is converted, and that a wrapper field for
+   * which no command-line argument was supplied retains its null default.
+   *
+   * @throws ArgException if there is an illegal argument
+   */
+  @Test
+  void testWrapperOptions() throws ArgException {
+    ClassWithWrapperOptions t = new ClassWithWrapperOptions();
+    Options options = new Options("test", t);
+
+    options.parse(
+        new String[] {
+          "--boolean-wrapper=false",
+          "--byte-wrapper=12",
+          "--short-wrapper=-1234",
+          "--integer-wrapper=123456",
+          "--long-wrapper=12345678901",
+          "--float-wrapper=1.5",
+        });
+
+    assert Boolean.FALSE.equals(t.booleanWrapper) : t.booleanWrapper;
+    assert Byte.valueOf((byte) 12).equals(t.byteWrapper) : t.byteWrapper;
+    assert Short.valueOf((short) -1234).equals(t.shortWrapper) : t.shortWrapper;
+    assert Integer.valueOf(123456).equals(t.integerWrapper) : t.integerWrapper;
+    assert Long.valueOf(12345678901L).equals(t.longWrapper) : t.longWrapper;
+    assert Float.valueOf(1.5f).equals(t.floatWrapper) : t.floatWrapper;
+    // Use of a wrapper type allows the argument to have no default value.
+    assert t.doubleWrapper == null : t.doubleWrapper;
+
+    // A Boolean option, like a boolean one, may be supplied without a value.
+    options.parse(new String[] {"--boolean-wrapper", "--double-wrapper=2.5"});
+    assert Boolean.TRUE.equals(t.booleanWrapper) : t.booleanWrapper;
+    assert Double.valueOf(2.5).equals(t.doubleWrapper) : t.doubleWrapper;
+  }
+
+  @Test
+  void testWrapperOptionsFail() throws ArgException {
+    ClassWithWrapperOptions t = new ClassWithWrapperOptions();
+    Options options = new Options("test", t);
+    Assertions.assertThrows(
+        ArgException.class,
+        () -> {
+          // should fail: not an integer
+          options.parse(new String[] {"--integer-wrapper=hello"});
+        });
+    Assertions.assertThrows(
+        ArgException.class,
+        () -> {
+          // should fail: not a boolean.  A Boolean is validated just as a boolean is, rather
+          // than silently becoming false.
+          options.parse(new String[] {"--boolean-wrapper=maybe"});
+        });
+  }
+
+  static class ClassWithPrimitiveAndWrapperOptions {
+    @Option("an int")
+    public int intPrimitive;
+
+    @Option("an Integer")
+    public @Nullable Integer intWrapper;
+
+    @Option("a boolean")
+    public boolean boolPrimitive;
+
+    @Option("a Boolean")
+    public @Nullable Boolean boolWrapper;
+  }
+
+  /**
+   * Test that a primitive type and its wrapper accept the same arguments: the same numeric formats
+   * and the same boolean spellings.
+   *
+   * @throws ArgException if there is an illegal argument
+   */
+  @Test
+  void testPrimitiveAndWrapperAgree() throws ArgException {
+    // Each argument is written in decimal, hexadecimal, and octal.
+    String[] integralArgs = {"16", "0x10", "0X10", "#10", "020", "-0x10"};
+    int[] expected = {16, 16, 16, 16, 16, -16};
+    for (int i = 0; i < integralArgs.length; i++) {
+      ClassWithPrimitiveAndWrapperOptions t = new ClassWithPrimitiveAndWrapperOptions();
+      Options options = new Options("test", t);
+      options.parse(
+          new String[] {"--int-primitive=" + integralArgs[i], "--int-wrapper=" + integralArgs[i]});
+      assert t.intPrimitive == expected[i] : integralArgs[i] + " -> " + t.intPrimitive;
+      assert Integer.valueOf(expected[i]).equals(t.intWrapper)
+          : integralArgs[i] + " -> " + t.intWrapper;
+    }
+
+    // Each spelling of a boolean, and the corresponding expected value.
+    String[] booleanArgs = {"true", "TRUE", "t", "T", "false", "False", "f", "F"};
+    boolean[] expectedBooleans = {true, true, true, true, false, false, false, false};
+    for (int i = 0; i < booleanArgs.length; i++) {
+      ClassWithPrimitiveAndWrapperOptions t = new ClassWithPrimitiveAndWrapperOptions();
+      Options options = new Options("test", t);
+      options.parse(
+          new String[] {"--bool-primitive=" + booleanArgs[i], "--bool-wrapper=" + booleanArgs[i]});
+      assert t.boolPrimitive == expectedBooleans[i] : booleanArgs[i];
+      assert Boolean.valueOf(expectedBooleans[i]).equals(t.boolWrapper) : booleanArgs[i];
+    }
+
+    // A value that neither a primitive nor a wrapper accepts.
+    for (String badArg : new String[] {"maybe", "yes", "", "2"}) {
+      ClassWithPrimitiveAndWrapperOptions t = new ClassWithPrimitiveAndWrapperOptions();
+      Options options = new Options("test", t);
+      Assertions.assertThrows(
+          ArgException.class, () -> options.parse(new String[] {"--bool-primitive=" + badArg}));
+      Assertions.assertThrows(
+          ArgException.class, () -> options.parse(new String[] {"--bool-wrapper=" + badArg}));
+    }
+  }
+
+  static class ClassWithCharacterOptions {
+    @Option("a char")
+    public char charPrimitive = ' ';
+
+    @Option("a Character")
+    public @Nullable Character charWrapper;
+  }
+
+  /**
+   * Test that char and Character accept the same arguments: exactly one character, and nothing
+   * else.
+   *
+   * @throws ArgException if there is an illegal argument
+   */
+  @Test
+  void testCharacterOptions() throws ArgException {
+    for (String arg : new String[] {"x", "X", "7", "-", "=", " "}) {
+      ClassWithCharacterOptions t = new ClassWithCharacterOptions();
+      Options options = new Options("test", t);
+      options.parse(new String[] {"--char-primitive=" + arg, "--char-wrapper=" + arg});
+      assert t.charPrimitive == arg.charAt(0) : arg + " -> " + t.charPrimitive;
+      assert Character.valueOf(arg.charAt(0)).equals(t.charWrapper) : arg + " -> " + t.charWrapper;
+    }
+
+    // Use of a wrapper type allows the argument to have no default value.
+    ClassWithCharacterOptions unset = new ClassWithCharacterOptions();
+    new Options("test", unset);
+    assert unset.charWrapper == null : unset.charWrapper;
+
+    // Neither a char nor a Character accepts a value that is not exactly one character.
+    for (String badArg : new String[] {"", "xy", "abc"}) {
+      ClassWithCharacterOptions t = new ClassWithCharacterOptions();
+      Options options = new Options("test", t);
+      Assertions.assertThrows(
+          ArgException.class, () -> options.parse(new String[] {"--char-primitive=" + badArg}));
+      Assertions.assertThrows(
+          ArgException.class, () -> options.parse(new String[] {"--char-wrapper=" + badArg}));
+    }
+  }
+
+  /**
+   * Test that tokenize throws ArgException for unclosed quotes.
+   *
+   * @throws ArgException if there is an illegal argument
+   */
+  @Test
+  void testTokenizeUnclosedQuote() throws ArgException {
+    // Test unclosed double quote
+    Assertions.assertThrows(
+        ArgException.class,
+        () -> {
+          Options.tokenize("--option \"unclosed quote");
+        });
+    // Test unclosed single quote
+    Assertions.assertThrows(
+        ArgException.class,
+        () -> {
+          Options.tokenize("--option 'unclosed quote");
+        });
+    ArgException e =
+        Assertions.assertThrows(ArgException.class, () -> Options.tokenize("a 'b c\"d\" e"));
+    Assertions.assertEquals(
+        "Unclosed single quote at index 2 in command line: a 'b c\"d\" e", e.getMessage());
+    // Test that properly quoted strings work fine
+    String[] result = Options.tokenize("--option \"closed quote\"");
+    Assertions.assertArrayEquals(new String[] {"--option", "closed quote"}, result);
+  }
+
+  /**
+   * Test that tokenize removes quote characters.
+   *
+   * @throws ArgException if there is an illegal argument
+   */
+  @Test
+  void testTokenizeQuotes() throws ArgException {
+    Assertions.assertArrayEquals(
+        new String[] {"--file=/my dir/f.txt", "-x"}, Options.tokenize("--file='/my dir/f.txt' -x"));
+    Assertions.assertArrayEquals(
+        new String[] {"--name=a 'b' c"}, Options.tokenize("--name=\"a 'b' c\""));
+    Assertions.assertArrayEquals(new String[] {"it's"}, Options.tokenize("'it'\"'\"'s'"));
+    Assertions.assertArrayEquals(new String[] {"a", "", "b"}, Options.tokenize(" a  ''  b "));
+    Assertions.assertArrayEquals(new String[] {""}, Options.tokenize("\"\""));
+    Assertions.assertArrayEquals(new String[] {}, Options.tokenize("  "));
+    // A control character is not whitespace.
+    Assertions.assertArrayEquals(new String[] {"\u0001a"}, Options.tokenize("\u0001a"));
+  }
+
+  /**
+   * Test that tokenize converts the result of getOptionsString back into the original arguments.
+   *
+   * @throws ArgException if there is an illegal argument
+   */
+  @Test
+  void testOptionsStringRoundTrip() throws ArgException {
+    ClassWithOptions withSpace = new ClassWithOptions();
+    Options withSpaceOptions = new Options("test", withSpace);
+    withSpaceOptions.parse(Options.tokenize("--arg2='/my dir/f.txt' -b"));
+    Assertions.assertEquals("/my dir/f.txt", withSpace.arg2);
+    Assertions.assertEquals("--arg2='/my dir/f.txt' -b", withSpaceOptions.getOptionsString());
+
+    for (String value :
+        new String[] {
+          "plain", "", "a b", "a\tb", "a\nb", "it's", "say \"hi\"", "say \"hi\" it's"
+        }) {
+      ClassWithOptions t = new ClassWithOptions();
+      Options options = new Options("test", t);
+      options.parse(new String[] {"--arg2=" + value, "-b"});
+      Assertions.assertEquals(value, t.arg2);
+      Assertions.assertArrayEquals(
+          new String[] {"--arg2=" + value, "-b"}, Options.tokenize(options.getOptionsString()));
+    }
+
+    // A value that is a separate token remains a separate token.  This preserves a value that
+    // contains the ",-" separator.
+    for (String value : new String[] {"plain", "", "a b", "-x", "a,-b", "a '\" ,-b", ",-b"}) {
+      ClassWithOptions t = new ClassWithOptions();
+      Options options = new Options("test", t);
+      options.parse(new String[] {"--arg2", value, "-b"});
+      Assertions.assertEquals(value, t.arg2);
+      String[] tokens = Options.tokenize(options.getOptionsString());
+      Assertions.assertArrayEquals(new String[] {"--arg2", value, "-b"}, tokens);
+      ClassWithOptions t2 = new ClassWithOptions();
+      new Options("test", t2).parse(tokens);
+      Assertions.assertEquals(value, t2.arg2);
+      Assertions.assertTrue(t2.bool);
+    }
   }
 }

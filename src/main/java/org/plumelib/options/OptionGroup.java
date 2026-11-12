@@ -27,16 +27,16 @@ import java.lang.annotation.Target;
  *  /** comment for first option{@literal *}/
  * {@literal @}OptionGroup("the group")
  * {@literal @}Option("the first option")
- *  public static int first_option = blah;</pre>
+ *  public static int firstOption = blah;</pre>
  *
- * instead of
+ * <p>instead of
  *
  * <pre>
  * {@literal @}OptionGroup("the group")
  *
  *  /** comment for first option{@literal *}/
  * {@literal @}Option("the first option")
- *  public static int first_option = blah;</pre>
+ *  public static int firstOption = blah;</pre>
  *
  * @see org.plumelib.options.Options
  * @see org.plumelib.options.Option
@@ -53,8 +53,9 @@ public @interface OptionGroup {
    * @return the name of this option group
    */
   String value();
+
   /**
-   * Whether this option group is unpublicized.
+   * True if this option group is unpublicized.
    *
    * @return true if this option group is unpublicized, false if it is publicized
    */
